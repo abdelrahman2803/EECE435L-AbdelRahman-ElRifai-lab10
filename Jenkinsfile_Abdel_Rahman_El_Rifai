@@ -1,0 +1,74 @@
+pipeline {
+    agent any
+
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 20, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    parameters {
+        string(name: 'PYTHON_EXE', defaultValue: 'C:/Users/user/AppData/Local/Python/pythoncore-3.14-64/python.exe', description: 'Absolute path to Python on the Windows Jenkins machine')
+        string(name: 'DEPLOY_DIR', defaultValue: 'C:/Users/user/Desktop/EECE435L/lab10/deployment', description: 'Local deployment folder outside the Jenkins workspace')
+    }
+
+    environment {
+        VIRTUAL_ENV = 'venv'
+        PYTHONUTF8 = '1'
+    }
+
+    stages {
+        stage('Setup') {
+            steps {
+                bat '"%PYTHON_EXE%" -m venv "%VIRTUAL_ENV%"'
+                bat '"%VIRTUAL_ENV%\\Scripts\\python.exe" -m pip install -r requirements.txt'
+                bat 'if not exist reports mkdir reports'
+                bat '"%VIRTUAL_ENV%\\Scripts\\python.exe" --version'
+            }
+        }
+        stage('Lint') {
+            steps {
+                bat '"%VIRTUAL_ENV%\\Scripts\\python.exe" -m flake8 app.py deploy.py tests'
+            }
+        }
+        stage('Test') {
+            steps {
+                bat '"%VIRTUAL_ENV%\\Scripts\\python.exe" -m pytest -v --junitxml=reports/tests.xml'
+            }
+            post {
+                always {
+                    junit testResults: 'reports/tests.xml', allowEmptyResults: false
+                }
+            }
+        }
+        stage('Coverage') {
+            steps {
+                bat '"%VIRTUAL_ENV%\\Scripts\\python.exe" -m coverage run -m pytest -v'
+                bat '"%VIRTUAL_ENV%\\Scripts\\python.exe" -m coverage xml -o reports/coverage.xml'
+                bat '"%VIRTUAL_ENV%\\Scripts\\python.exe" -m coverage html -d reports/htmlcov'
+                bat '"%VIRTUAL_ENV%\\Scripts\\python.exe" -m coverage report > reports/coverage.txt'
+                bat 'type reports\\coverage.txt'
+            }
+        }
+        stage('Security Scan') {
+            steps {
+                bat '"%VIRTUAL_ENV%\\Scripts\\python.exe" -m bandit app.py deploy.py -f json -o reports/bandit.json'
+            }
+        }
+        stage('Deploy') {
+            steps {
+                bat '"%VIRTUAL_ENV%\\Scripts\\python.exe" deploy.py --target "%DEPLOY_DIR%" --release "%BUILD_NUMBER%"'
+                bat '"%VIRTUAL_ENV%\\Scripts\\python.exe" "%DEPLOY_DIR%\\releases\\%BUILD_NUMBER%\\app.py"'
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'reports/**/*', allowEmptyArchive: true, fingerprint: true
+        }
+        cleanup {
+            cleanWs()
+        }
+    }
+}
